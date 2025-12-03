@@ -10,3 +10,4 @@ pytorch-msssim
 einops
 tensorboard
 tqdm
+matplotlib
