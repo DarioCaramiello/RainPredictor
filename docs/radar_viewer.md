@@ -184,17 +184,7 @@ python radar_viewer.py     -i /path/to/radar_geotiff.tif     -p palette.json    
 
 ---
 
-## Project Structure
-
-```text
-radar_viewer.py        # Main script
-palette.json           # Example palette
-README.md              # This file
-```
-
----
-
 ## License
 
-MIT License.
+Apache 2.0 License.
 
