@@ -154,6 +154,47 @@ def verify_checksum(path: str, expected_sha: str, logger=None) -> bool:
     return False
 
 
+
+def resample_image(path: str, factor: float, logger=None) -> bool:
+    """Resample an image in-place by the given factor, preserving aspect ratio.
+
+    The image is opened, resized, and saved back to the same path. A factor of
+    1.0 leaves the image unchanged. Factors must be greater than 0.
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    if factor == 1.0:
+        # Nothing to do
+        return True
+
+    if factor <= 0:
+        logger.error("Invalid resample factor %s. It must be > 0.", factor)
+        return False
+
+    try:
+        from PIL import Image  # Imported lazily in case Pillow is not installed at runtime
+
+        with Image.open(path) as img:
+            width, height = img.size
+
+            new_width = max(1, int(round(width * factor)))
+            new_height = max(1, int(round(height * factor)))
+
+            # Use a reasonable resampling filter, preserving aspect ratio
+            resized = img.resize((new_width, new_height), Image.BILINEAR)
+            resized.save(path, format=img.format)
+
+        logger.info(
+            "Resampled %s from %dx%d to %dx%d",
+            path, width, height, new_width, new_height
+        )
+        return True
+    except Exception as e:
+        logger.error("Failed to resample image %s: %s", path, e)
+        return False
+
+
 def download_one(
     dt: datetime,
     output_dir: str,
@@ -162,6 +203,7 @@ def download_one(
     postfix: str,
     skip_existing: bool,
     retries: int,
+    resample_factor: float,
     checksums: dict | None,
     verify_checksums: bool,
     logger=None,
@@ -194,11 +236,19 @@ def download_one(
 
         # checksum verification
         if verify_checksums and checksums and filename in checksums:
-            if verify_checksum(dest_path, checksums[filename], logger=logger):
-                return True
-            else:
+            if not verify_checksum(dest_path, checksums[filename], logger=logger):
                 if attempt < attempts:
                     logger.warning("Retry due to checksum mismatch: %s", filename)
+                    continue
+                return False
+
+        # Optional resampling of the downloaded image (after a successful download
+        # and optional checksum verification). This is done in-place and preserves
+        # the original aspect ratio.
+        if resample_factor != 1.0:
+            if not resample_image(dest_path, resample_factor, logger=logger):
+                if attempt < attempts:
+                    logger.warning("Retry due to resampling failure: %s", filename)
                     continue
                 return False
 
@@ -249,6 +299,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--parallel", action="store_true")
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument( "--resample", type=float, default=1.0, help=("Resample factor for images; e.g. 0.5 halves width/height, 2.0 doubles them. 1.0 = no resampling."))
 
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--retries", type=int, default=3)
@@ -276,6 +327,16 @@ def main():
         checksums = load_checksums(args.checksum_file, logger)
         verify_checksums = bool(checksums)
 
+    # Safety guard: resampling modifies the downloaded files in-place, which would
+    # invalidate checksum verification on subsequent runs. To avoid confusion,
+    # forbid combining resampling with checksum verification.
+    if getattr(args, "resample", 1.0) != 1.0 and verify_checksums:
+        logger.error(
+            "Cannot use --resample together with --checksum-file. "
+            "Either drop checksum verification or set --resample 1.0."
+        )
+        sys.exit(1)
+
     # Build datetime list
     datetimes = list(iterate_datetimes(args.start, args.end, TIME_STEP_MINUTES))
 
@@ -297,6 +358,7 @@ def main():
                 args.postfix,
                 args.skip_existing,
                 args.retries,
+                args.resample,
                 checksums,
                 verify_checksums,
                 logger,
@@ -317,6 +379,7 @@ def main():
                     args.postfix,
                     args.skip_existing,
                     args.retries,
+                    args.resample,
                     checksums,
                     verify_checksums,
                     logger,
@@ -345,4 +408,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
