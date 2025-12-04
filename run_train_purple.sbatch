@@ -32,15 +32,6 @@ nvidia-smi || true
 echo "====================="
 
 
-python -u train.py \
-  --data-path $THIS_DIR/data/rdr0_splits \
-  --val-preview-root $THIS_DIR/previews \
-  --runs-dir $THIS_DIR/runs \
-  --checkpoint-dir $THIS_DIR/checkpoints \
-  --epochs 10 \
-  --batch-size 4 \
-  --lr 1e-3 \
-  --num-workers 8 \
-  --pred-length 6
+python -u train.py --data-path $THIS_DIR/data/rdr0_splits --val-preview-root $THIS_DIR/previews --runs-dir $THIS_DIR/runs --checkpoint-dir $THIS_DIR/checkpoints --epochs 10 --batch-size 4 --lr 1e-3 --num-workers 8
 
 echo "Training ended: $(date)"
