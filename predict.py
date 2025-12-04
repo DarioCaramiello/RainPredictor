@@ -69,6 +69,9 @@ def load_model(checkpoint_path: str, device: torch.device, pred_length: int) -> 
         state_dict = ckpt["model_state_dict"]
     else:
         state_dict = ckpt
+    # Handle checkpoints saved from DataParallel (keys starting with 'module.').
+    if any(k.startswith("module.") for k in state_dict.keys()):
+        state_dict = {k[len("module.") :]: v for k, v in state_dict.items()}
     model.load_state_dict(state_dict)
     model.eval()
     return model
