@@ -11,3 +11,4 @@ einops
 tensorboard
 tqdm
 matplotlib
+requests
