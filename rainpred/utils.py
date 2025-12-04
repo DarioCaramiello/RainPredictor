@@ -48,7 +48,7 @@ def benchmark_train(loader, model, optimizer, device, criterion_sl1,
         targets = targets.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         if scaler is not None:
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast("cuda"):
                 outputs, _ = model(inputs, pred_length)
                 loss = criterion_sl1(outputs, targets)
             scaler.scale(loss).backward()
@@ -72,7 +72,7 @@ def benchmark_train(loader, model, optimizer, device, criterion_sl1,
         targets = targets.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         if scaler is not None:
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast("cuda"):
                 outputs, _ = model(inputs, pred_length)
                 loss = criterion_sl1(outputs, targets)
             scaler.scale(loss).backward()
