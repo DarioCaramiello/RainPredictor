@@ -1,179 +1,119 @@
-# Radar Dataset Downloader
+# Radar dataset downloader
 
-This tool downloads weather radar TIFF files from the **meteo@uniparthenope** data server.
+This script downloads a sequence of weather radar TIFF images from a base URL,
+organised in the following directory layout on the server:
 
-It supports:
+`{base_url}/YYYY/MM/DD/<prefix>YYYYMMDDZhhmm<postfix>`
 
-- Custom date ranges  
-- Custom filename prefix and postfix  
-- Parallel downloads  
-- Retry logic  
-- Skipping previously downloaded files  
-- Optional SHA256 checksum verification  
-- Optional logging to file  
-- Dry-run mode  
-- Full exit-status reporting  
+For example:
 
----
+`https://data.meteo.uniparthenope.it/instruments/rdr0/2025/12/01/rdr0_d02_20251201Z1510_VMI.tiff`
 
-## ## URL structure
+The script supports:
 
-Data are stored on:
+- Date–range based download with a fixed 10-minute step.
+- Sequential or parallel downloads.
+- Skipping files that are already present locally.
+- Retry logic on failures.
+- Optional checksum verification via a manifest file.
+- **Optional in-place resampling of downloaded images, preserving aspect ratio.**
 
-```
-https://data.meteo.uniparthenope.it/instruments/rdr0/YYYY/MM/DD/
-```
-
-Filenames follow the pattern:
-
-```
-{prefix}{YYYYMMDDZhhmm}{postfix}
-```
-
-Default:
-
-```
-prefix = rdr0_d02_
-postfix = _VMI.tiff
-```
-
-Example filename:
-
-```
-rdr0_d02_20251202Z1510_VMI.tiff
-```
-
----
-
-# ## Usage
-
-### Basic usage
-
-Download images from *2025‑12‑02 15:10* to *2025‑12‑02 17:00*:
+## Usage
 
 ```bash
-python download_dataset.py 202512021510 202512021700
+./download_dataset-2.py START_DATETIME END_DATETIME [options]
 ```
 
-Downloads files from:
+Where dates are expressed as:
 
-```
-https://data.meteo.uniparthenope.it/instruments/rdr0/YYYY/MM/DD/rdr0_d02_YYYYMMDDZhhmm_VMI.tiff
-```
-
-and saves them under:
-
-```
-downloads/YYYY/MM/DD/
-```
-
----
-
-# ## Custom prefix and postfix
+- `START_DATETIME` = `YYYYMMDDHHMM`
+- `END_DATETIME`   = `YYYYMMDDHHMM`
 
 Example:
 
 ```bash
-python download_dataset.py 202512021510 202512021700     --prefix rdr0_d01_     --postfix _VMI.tiff
+./download_dataset-2.py 202512010000 202512012359 \
+    --output-dir data/rdr0_raw \
+    --base-url https://data.meteo.uniparthenope.it/instruments/rdr0 \
+    --prefix rdr0_d02_ \
+    --postfix _VMI.tiff
 ```
 
-This produces filenames such as:
+## Main options
 
-```
-rdr0_d01_20251202Z1510_VMI.tiff
-```
+- `-o, --output-dir DIR`  
+  Destination root directory (default: `downloads`).
 
----
+- `--base-url URL`  
+  Base URL of the radar dataset (default:
+  `https://data.meteo.uniparthenope.it/instruments/rdr0`).
 
-# ## Parallel download
+- `--prefix PREFIX`  
+  Filename prefix (default: `rdr0_d02_`).
 
-To speed up large downloads:
+- `--postfix POSTFIX`  
+  Filename postfix/extension (default: `_VMI.tiff`).
+
+- `--dry-run`  
+  Do not download anything; print the URLs that would be fetched.
+
+- `--parallel`  
+  Enable parallel downloads using a thread pool.
+
+- `--workers N`  
+  Number of parallel worker threads when `--parallel` is active (default: 4).
+
+- `--skip-existing`  
+  Skip files already present in the output directory.
+
+- `--retries N`  
+  Number of download attempts per file (default: 3).
+
+- `--log-file PATH`  
+  Also, write log messages to the given file.
+
+- `--checksum-file PATH`  
+  Path to a text file with `filename sha256` pairs used to verify downloads.
+
+### New: image resampling
+
+- `--resample FACTOR`  
+  Resample each downloaded image in-place by the given factor, **preserving
+  aspect ratio**. Width and height are both multiplied by `FACTOR`.
+
+  Examples:
+  - `--resample 0.5`  → image size reduced to 50% in each dimension.  
+  - `--resample 2.0`  → image size doubled in each dimension.  
+  - `--resample 1.0`  → no resampling (default).
+
+Resampling is performed after a successful download (and optional checksum
+verification) using Pillow (PIL). Images are overwritten in-place, preserving
+their original format.
+
+> **Note:** Resampling modifies the file contents, so it is **not allowed
+> together with checksum verification** (`--checksum-file`). If you set a
+> resample factor different from `1.0` and also provide `--checksum-file`, the
+> script will exit with an error.
+
+## Requirements
+
+- Python 3.8+
+- Required Python packages:
+  - `requests`
+  - `tqdm`
+  - `Pillow` (only if `--resample` is used)
+
+Install them with:
 
 ```bash
-python download_dataset.py 202512021510 202512021700     --parallel --workers 8
+pip install requests tqdm Pillow
 ```
 
----
+## Exit codes
 
-# ## Skip files already downloaded
-
-If you want to resume a previous session:
-
-```bash
-python download_dataset.py 202512021510 202512021700     --skip-existing
-```
+- `0` on success (all requested files downloaded/skipped cleanly).
+- `1` if at least one download (or verification/resampling) fails.
 
 ---
 
-# ## Retry failed downloads
-
-Example: retry each file up to **5 times**:
-
-```bash
-python download_dataset.py 202512021510 202512021700     --retries 5
-```
-
----
-
-# ## Dry run
-
-Print what would be downloaded **without downloading anything**:
-
-```bash
-python download_dataset.py 202512021510 202512021700 --dry-run
-```
-
----
-
-# ## Logging
-
-Write logs to a file:
-
-```bash
-python download_dataset.py 202512021510 202512021700     --log-file download.log
-```
-
----
-
-# ## Checksum verification
-
-If you have a SHA256 manifest file (format: `filename sha256hex`):
-
-```bash
-python download_dataset.py 202512021510 202512021700     --checksum-file checksums.txt
-```
-
-All downloaded files will be verified.
-
----
-
-# ## Changing the base URL
-
-To download from another server while keeping the same folder structure:
-
-```bash
-python download_dataset.py 202512021510 202512021700     --base-url https://data.meteo.uniparthenope.it/instruments/rdr0/
-```
-
----
-
-# ## Exit codes
-
-- **0** — all files downloaded successfully  
-- **1** — one or more files failed  
-- **2** — internal error (rare)
-
----
-
-# ## Example: Full featured run
-
-```bash
-python download_dataset.py 202512021510 202512021700     --base-url https://data.meteo.uniparthenope.it/instruments/rdr0/     --prefix rdr0_d02_     --postfix _VMI.tiff     --parallel --workers 8     --skip-existing     --retries 5     --log-file radar_download.log
-```
-
----
-
-# ## Author
-
-Generated automatically by ChatGPT upon request.
-
+_Last update: 2025-12-04T16:29:20 UTC_
