@@ -93,7 +93,7 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.1, patience=5)
-    scaler = torch.cuda.amp.GradScaler(enabled=(USE_AMP and DEVICE == "cuda"))
+    scaler = torch.amp.GradScaler("cuda",enabled=(USE_AMP and DEVICE == "cuda"))
 
     train_loader, val_loader = create_dataloaders(
         data_path=data_path,
