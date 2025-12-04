@@ -1,146 +1,121 @@
+# RainPredictor – Hybrid Training + Inference (GeoTIFF, Full Resolution)
 
-# RainPredictor
+This project implements a radar nowcasting model (`RainPredRNN`) that:
 
-## Overview
-RainPredictor is an advanced deep learning system for radar-based precipitation nowcasting, combining a U-Net encoder/decoder architecture with a temporal Transformer. The model processes sequences of radar reflectivity images (TIFF format) to predict future precipitation patterns.
+- Trains on GeoTIFF radar images at native resolution (no resize).
+- Uses zero-padding (bottom/right) to satisfy UNet + Transformer patch constraints.
+- Preserves georeferencing (CRS + affine transform) when saving predictions.
+- Provides:
+  - `train.py` for training,
+  - `predict.py` for m→n inference,
+  - `compare.py` for quick visual comparison in lon/lat.
 
-RainPredictor has been developed with the framework of the Hi-WeFAI cascade funding project ([https://hiwefai-project.org](https://hiwefai-project.org), “National Center ICSC; National Center for HPC, Big Data and Quantum Computing; Cascade Call; Spoke 9 Digital Society & Smart City; CUP E63C22000980007; IDENTIFICATION CODE CN\_00000013).
+## 1. Example Radar-style Naming
 
-### Key Features
-- **Advanced Architecture**: 
-  - U-Net encoder/decoder for robust spatial feature extraction
-  - Temporal Transformer for sophisticated sequence modeling
-  - Hybrid design optimized for meteorological predictions
-- **Data Processing**:
-  - Input/Output: Single-channel radar TIFF images
-  - Automated data normalization and augmentation
-  - Comprehensive evaluation metrics (MAE, MSE, SSIM, CSI)
-- **Technical Features**:
-  - Mixed precision training (AMP) on CUDA
-  - Flexible gradient accumulation
-  - Cross-platform support (Linux, macOS, Windows)
-  - Real-time TensorBoard logging
-  - Extensive performance optimization options
+Example input frames:
 
-### Dataset Structure
-The dataset should be organized in three splits (train/val/test), each containing chronologically ordered TIFF frames. The data loader recursively scans for `*.tiff` files in each directory.
-
-## 2. Model Architecture
-
-### Network Components
-- **Encoder Network**
-  - U-Net downsampling path with Conv-BN-ReLU blocks
-  - MaxPool operations for spatial feature hierarchy
-  - Efficient feature extraction from radar images
-
-- **Temporal Processing**
-  - Transformer architecture for sequence modeling
-  - Patch-wise embeddings for temporal attention
-  - Advanced temporal dependency learning
-
-- **Decoder Network**
-  - U-Net upsampling path with skip connections
-  - Feature refinement through progressive upsampling
-  - High-resolution output reconstruction
-
-### Data Processing Pipeline
-- **Normalization**
-  - Radar values clipped to [0,70] dBZ range
-  - Linear scaling to [0,1] for stable training
-  - Automated handling of missing/invalid values
-
-- **Augmentation** (Training Only)
-  - Spatial flips and random affine transformations
-  - Implemented via torchio for efficiency
-  - Configurable augmentation parameters
-
-### Evaluation System
-- **Core Metrics**
-  - MAE (Mean Absolute Error)
-  - MSE (Mean Squared Error)
-  - SSIM (Structural Similarity Index)
-  - CSI (Critical Success Index) with configurable dBZ threshold
-
-- **Monitoring**
-  - Real-time TensorBoard logging
-  - Per-epoch training loss tracking
-  - Validation metrics visualization
-  - Model prediction samples
-
-## 3. Installation and Setup
-
-### Prerequisites
-> **Recommended**: Use Conda (conda-forge) for consistent GDAL/rasterio installation
-
-### Dependencies
-- **Python Version**: 3.10-3.12
-- **Core Libraries**:
-  - PyTorch & torchvision
-  - NumPy & scikit-image
-  - scikit-learn
-  - pytorch-msssim & einops
-  - rasterio (GDAL-dependent)
-  - Pillow, tensorboard, torchio
-
-### Installation Guide
-
-### Create env
-```
-conda create -n rainpredrnn2 python=3.11 -y
-conda activate rainpredrnn2
-```
-## Install PyTorch
-## Linux/Windows CUDA (choose version from pytorch.org if needed)
-CPU-only: replace with 
-```
-pytorch torchvision cpuonly -c pytorch
+```text
+rdr0_d02_20251202Z1510_VMI.tiff
+rdr0_d02_20251202Z1520_VMI.tiff
+...
+rdr0_d02_20251202Z1800_VMI.tiff
 ```
 
+If you run:
+
+```bash
+python predict.py \
+  --checkpoint checkpoints/best_model.pth \
+  --input-dir /data/radar_seq \
+  --output-dir /data/preds \
+  --m 18 \
+  --n 6
 ```
-conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia -y
+
+The code:
+
+- Infers the time step from the last two inputs (e.g., 10 minutes).
+- Builds the next `n` timestamps.
+- Produces future filenames:
+
+```text
+rdr0_d02_20251202Z1810_VMI.tiff
+rdr0_d02_20251202Z1820_VMI.tiff
+...
 ```
 
-### Rasterio + deps (via conda-forge: safest)
+All outputs are full-resolution GeoTIFFs with CRS and transform identical to the inputs.
+
+## 2. Training Example
+
+Dataset layout:
+
+```text
+/data/rdr0_splits/
+├─ train/
+│  ├─ rdr0_d02_*.tiff
+├─ val/
+│  ├─ rdr0_d02_*.tiff
 ```
-conda install -c conda-forge rasterio gdal -y
+
+Train with:
+
+```bash
+python train.py \
+  --data-path /data/rdr0_splits \
+  --epochs 20 \
+  --batch-size 4 \
+  --lr 1e-3 \
+  --num-workers 8 \
+  --pred-length 6
 ```
 
-### The rest via pip (or conda if you prefer)
+Use `--small-debug` to run a tiny subset for quick testing.
+
+TensorBoard:
+
+```bash
+tensorboard --logdir runs
 ```
-pip install numpy scikit-image scikit-learn pytorch-msssim einops pillow tensorboard torchio
+
+## 3. Inference Example
+
+After training, run inference on a sequence directory:
+
+```bash
+python predict.py \
+  --checkpoint checkpoints/best_model.pth \
+  --input-dir /data/radar_seq \
+  --output-dir /data/preds \
+  --m 18 \
+  --n 6
 ```
-### 3.2 macOS (Apple Silicon)
 
-Install PyTorch with MPS support (CPU/MPS):
+Options:
+
+- `--pattern .tif` (default) or `.tiff` depending on files.
+- `--cpu` to force CPU inference.
+
+## 4. Visual Comparison in Physical Coordinates
+
+```bash
+python compare.py \
+  --input /data/radar_seq/rdr0_d02_20251202Z1800_VMI.tiff \
+  --pred  /data/preds/rdr0_d02_20251202Z1810_VMI.tiff \
+  --title "t=1800 vs t+1 prediction"
 ```
-conda create -n rainpredrnn2 python=3.11 -y
-conda activate rainpredrnn2
-conda install pytorch torchvision -c pytorch -y       # this enables MPS on macOS
-conda install -c conda-forge rasterio gdal -y
-pip install numpy scikit-image scikit-learn pytorch-msssim einops pillow tensorboard torchio
-```
-You can use "mps" as device (see §6 “Configuration”).
 
-### 3.3 Windows notes
-Prefer Conda: 
-```
-conda-forge provides compatible GDAL/rasterio builds.
-```
-For CUDA, install the matching PyTorch build (see pytorch.org “Get Started”).
+This script:
 
-## 4) Quick Start
+- Uses rasterio to get transform and extent.
+- Plots input and predicted frames side-by-side in lon/lat.
+- Adds colorbars for quick qualitative assessment.
 
-### macOS (local)
+## 5. Reproducibility Notes
 
-### Linux cluster / Ubuntu
-
-
-## Usage
-* Training [link](docs/train.md)
-* Inference [link](docs/predict.md)
-* Dataset splitting [link](docs/make_splits.md)
-* Radar image visualizer [link](docs/radar_viewer.md)
-
-## License
-Apache 2.0 License.
-
+- `set_seed(15)` is called in the data and training code.
+- Hyperparameters can be controlled from:
+  - `rainpred/config.py` (defaults),
+  - CLI flags in `train.py` and `infer_sequence.py`.
+- All GeoTIFF outputs keep the original CRS and transform so that they can be
+  consumed by GIS software or downstream hydrological models directly.
