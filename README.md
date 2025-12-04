@@ -119,3 +119,11 @@ This script:
   - CLI flags in `train.py` and `infer_sequence.py`.
 - All GeoTIFF outputs keep the original CRS and transform so that they can be
   consumed by GIS software or downstream hydrological models directly.
+
+
+## 6. Multi-GPU and restartable training (summary)
+
+- `train.py` automatically uses all visible GPUs via `torch.nn.DataParallel` when `DEVICE` is `cuda` and more than one GPU is available.
+- Use `--resume-from /path/to/last_checkpoint.pth` to restart from an intermediate checkpoint.
+- Control how often `last_checkpoint.pth` is refreshed with `--save-every N`.
+- `predict.py` can load checkpoints produced on single-GPU or multi-GPU runs; if parameters were saved with a `module.` prefix, this is handled automatically.
