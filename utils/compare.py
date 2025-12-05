@@ -13,7 +13,7 @@ Features
 - Robust handling of NaN/inf and constant fields (no vmin > vmax crashes)
 - Logging instead of print
 - Colorbar placed outside the plot area to avoid overlapping images
-- Frame-by-frame and overall metrics (MSE, MAE, Bias, Correlation)
+- Frame-by-frame and overall metrics (MSE, RMSE, MAE, Bias, Correlation)
 - Metrics panel plotted at the bottom of the figure
 - User-selectable figure orientation: landscape or portrait
 - Optional JSON dump with all per-frame and overall metrics (--metrics-json)
@@ -94,8 +94,7 @@ def load_palette(path: Path):
 
     if len(colors) != len(levels):
         raise ValueError(
-            f"Palette %s: %d colors but %d levels."
-            % (path, len(colors), len(levels))
+            f"Palette {path}: {len(colors)} colors but {len(levels)} levels."
         )
 
     # BoundaryNorm expects len(boundaries) = len(colors) + 1
@@ -295,7 +294,7 @@ def compute_frame_metrics(truth: np.ndarray, pred: np.ndarray):
     p = pred[mask].ravel()
     diff = p - t
 
-    mse = float(np.mean(diff ** 2))
+    mse = float(np.mean(diff**2))
     mae = float(np.mean(np.abs(diff)))
     bias = float(np.mean(diff))
 
@@ -332,7 +331,7 @@ def compute_overall_metrics(truth_list: list[np.ndarray], pred_list: list[np.nda
     p = np.concatenate(all_p)
     diff = p - t
 
-    mse = float(np.mean(diff ** 2))
+    mse = float(np.mean(diff**2))
     mae = float(np.mean(np.abs(diff)))
     bias = float(np.mean(diff))
 
@@ -388,11 +387,12 @@ def plot_sequence(
 
     nframes = len(cached)
 
-    # Precompute metrics
-    per_frame_metrics = []
+    # Precompute metrics (including RMSE) per frame
+    per_frame_metrics: list[dict] = []
     for ts, truth_data, pred_data in cached:
         m = compute_frame_metrics(truth_data, pred_data)
-        m_with_ts = {"timestamp": ts}
+        rmse = float(np.sqrt(m["mse"])) if np.isfinite(m["mse"]) else float("nan")
+        m_with_ts = {"timestamp": ts, "rmse": rmse}
         m_with_ts.update(m)
         per_frame_metrics.append(m_with_ts)
         logger.debug(
@@ -405,6 +405,12 @@ def plot_sequence(
         )
 
     overall = compute_overall_metrics(all_truth, all_pred)
+    overall_rmse = (
+        float(np.sqrt(overall["mse"])) if np.isfinite(overall["mse"]) else float("nan")
+    )
+    overall_with_rmse = dict(overall)
+    overall_with_rmse["rmse"] = overall_rmse
+
     logger.info(
         "Overall metrics: MSE=%.4f, MAE=%.4f, Bias=%.4f, Corr=%.4f",
         overall["mse"],
@@ -416,12 +422,6 @@ def plot_sequence(
     # Optional JSON dump of metrics
     if metrics_json is not None:
         logger.info("Writing metrics JSON to %s", metrics_json)
-        # Add RMSE explicitly
-        for m in per_frame_metrics:
-            m["rmse"] = float(np.sqrt(m["mse"])) if np.isfinite(m["mse"]) else float("nan")
-        overall_with_rmse = dict(overall)
-        overall_with_rmse["rmse"] = float(np.sqrt(overall["mse"])) if np.isfinite(overall["mse"]) else float("nan")
-
         metrics_payload = {
             "per_frame": per_frame_metrics,
             "overall": overall_with_rmse,
@@ -484,12 +484,9 @@ def plot_sequence(
         # Annotate per-frame metrics on the left plot as text
         m = per_frame_metrics[row_idx]
         metric_text = (
-            f"RMSE={m['rmse']:.2f}"
-            
-            f"MAE={m['mae']:.2f}"
-            
-            f"Bias={m['bias']:.2f}"
-            
+            f"RMSE={m['rmse']:.2f}\n"
+            f"MAE={m['mae']:.2f}\n"
+            f"Bias={m['bias']:.2f}\n"
             f"R={m['corr']:.2f}"
         )
         ax_truth.text(
