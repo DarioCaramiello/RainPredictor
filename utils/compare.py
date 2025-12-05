@@ -3,7 +3,7 @@
 compare.py
 
 Compare truth vs predicted radar TIFF/GeoTIFF images as side-by-side panels
-for a sequence of timestamps.
+for a sequence of timestamps, and compute quantitative verification metrics.
 
 Features
 --------
@@ -13,6 +13,8 @@ Features
 - Robust handling of NaN/inf and constant fields (no vmin > vmax crashes)
 - Logging instead of print
 - Colorbar placed outside the plot area to avoid overlapping images
+- Frame-by-frame and overall metrics (MSE, MAE, Bias, Correlation)
+- Metrics panel plotted at the bottom of the figure
 """
 
 import argparse
@@ -271,6 +273,75 @@ def compute_global_range(arrays: list[np.ndarray]):
 
 
 # ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+def compute_frame_metrics(truth: np.ndarray, pred: np.ndarray):
+    """
+    Compute basic verification metrics between truth and prediction.
+
+    Returns
+    -------
+    metrics : dict
+        Keys: mse, mae, bias, corr
+    """
+    mask = np.isfinite(truth) & np.isfinite(pred)
+    if not np.any(mask):
+        return {"mse": np.nan, "mae": np.nan, "bias": np.nan, "corr": np.nan}
+
+    t = truth[mask].ravel()
+    p = pred[mask].ravel()
+    diff = p - t
+
+    mse = float(np.mean(diff ** 2))
+    mae = float(np.mean(np.abs(diff)))
+    bias = float(np.mean(diff))
+
+    if t.size > 1 and np.std(t) > 0.0 and np.std(p) > 0.0:
+        corr = float(np.corrcoef(t, p)[0, 1])
+    else:
+        corr = np.nan
+
+    return {"mse": mse, "mae": mae, "bias": bias, "corr": corr}
+
+
+def compute_overall_metrics(truth_list: list[np.ndarray], pred_list: list[np.ndarray]):
+    """
+    Compute overall metrics across all frames.
+
+    Returns
+    -------
+    metrics : dict
+        Keys: mse, mae, bias, corr
+    """
+    all_t = []
+    all_p = []
+    for truth, pred in zip(truth_list, pred_list):
+        mask = np.isfinite(truth) & np.isfinite(pred)
+        if not np.any(mask):
+            continue
+        all_t.append(truth[mask].ravel())
+        all_p.append(pred[mask].ravel())
+
+    if not all_t:
+        return {"mse": np.nan, "mae": np.nan, "bias": np.nan, "corr": np.nan}
+
+    t = np.concatenate(all_t)
+    p = np.concatenate(all_p)
+    diff = p - t
+
+    mse = float(np.mean(diff ** 2))
+    mae = float(np.mean(np.abs(diff)))
+    bias = float(np.mean(diff))
+
+    if t.size > 1 and np.std(t) > 0.0 and np.std(p) > 0.0:
+        corr = float(np.corrcoef(t, p)[0, 1])
+    else:
+        corr = np.nan
+
+    return {"mse": mse, "mae": mae, "bias": bias, "corr": corr}
+
+
+# ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
 def plot_sequence(
@@ -286,44 +357,81 @@ def plot_sequence(
 
     If norm is provided (e.g. BoundaryNorm from a palette), it is used.
     Otherwise global vmin/vmax are computed and used.
+
+    Additionally, a bottom panel shows frame-by-frame metrics (RMSE, MAE, Bias).
     """
     logger.info("Sequence mode: plotting %d frame pairs.", len(pairs))
 
     # First pass: read data and cache them
     cached: list[tuple[str, np.ndarray, np.ndarray]] = []
-    all_arrays: list[np.ndarray] = []
+    all_truth: list[np.ndarray] = []
+    all_pred: list[np.ndarray] = []
 
     for ts, truth_path, pred_path in pairs:
         truth_data = read_tiff(truth_path)
         pred_data = read_tiff(pred_path)
         cached.append((ts, truth_data, pred_data))
-        all_arrays.append(truth_data)
-        all_arrays.append(pred_data)
+        all_truth.append(truth_data)
+        all_pred.append(pred_data)
 
     # If no palette norm is provided, compute a global vmin/vmax
     if norm is None:
-        global_vmin, global_vmax = compute_global_range(all_arrays)
+        global_vmin, global_vmax = compute_global_range(all_truth + all_pred)
     else:
         global_vmin = global_vmax = None  # not used
 
-    nrows = len(cached)
-    ncols = 2
+    nframes = len(cached)
 
-    fig_width = 8
-    fig_height = max(3, 2 * nrows)
-    fig, axes = plt.subplots(
-        nrows=nrows,
-        ncols=ncols,
-        figsize=(fig_width, fig_height),
-        squeeze=False,
-        constrained_layout=True,  # let Matplotlib manage spacing
+    # Precompute metrics
+    per_frame_metrics = []
+    for ts, truth_data, pred_data in cached:
+        m = compute_frame_metrics(truth_data, pred_data)
+        per_frame_metrics.append(m)
+        logger.debug(
+            "Metrics %s: MSE=%.4f, MAE=%.4f, Bias=%.4f, Corr=%.4f",
+            ts,
+            m["mse"],
+            m["mae"],
+            m["bias"],
+            m["corr"],
+        )
+
+    overall = compute_overall_metrics(all_truth, all_pred)
+    logger.info(
+        "Overall metrics: MSE=%.4f, MAE=%.4f, Bias=%.4f, Corr=%.4f",
+        overall["mse"],
+        overall["mae"],
+        overall["bias"],
+        overall["corr"],
     )
+
+    # ------------------------------------------------------------------
+    # Figure layout using GridSpec: nframes rows for images + 1 row for metrics
+    # ------------------------------------------------------------------
+    import matplotlib.gridspec as gridspec
+
+    height_ratios = [1.0] * nframes + [0.6]
+    fig_height = max(4, 2 * nframes + 2)
+    fig_width = 9
+
+    fig = plt.figure(figsize=(fig_width, fig_height), constrained_layout=True)
+    gs = gridspec.GridSpec(
+        nrows=nframes + 1,
+        ncols=2,
+        figure=fig,
+        height_ratios=height_ratios,
+    )
+
+    axes_img = np.empty((nframes, 2), dtype=object)
 
     last_im = None
 
+    # Image panels
     for row_idx, (ts, truth_data, pred_data) in enumerate(cached):
-        ax_truth = axes[row_idx, 0]
-        ax_pred = axes[row_idx, 1]
+        ax_truth = fig.add_subplot(gs[row_idx, 0])
+        ax_pred = fig.add_subplot(gs[row_idx, 1])
+        axes_img[row_idx, 0] = ax_truth
+        axes_img[row_idx, 1] = ax_pred
 
         if norm is not None:
             im_truth = ax_truth.imshow(truth_data, cmap=cmap, norm=norm)
@@ -342,17 +450,73 @@ def plot_sequence(
         ax_truth.axis("off")
         ax_pred.axis("off")
 
-        # Keep a reference to any one of the images for colorbar
+        # Annotate per-frame metrics on the left plot as text
+        m = per_frame_metrics[row_idx]
+        metric_text = (
+            f"RMSE={np.sqrt(m['mse']):.2f}\n"
+            f"MAE={m['mae']:.2f}\n"
+            f"Bias={m['bias']:.2f}\n"
+            f"R={m['corr']:.2f}"
+        )
+        ax_truth.text(
+            0.01,
+            0.02,
+            metric_text,
+            transform=ax_truth.transAxes,
+            fontsize=8,
+            va="bottom",
+            ha="left",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+        )
+
         last_im = im_pred or im_truth
 
-    # Colorbar on the right, outside the last column
+    # Metrics panel (bottom row, spanning both columns)
+    ax_metrics = fig.add_subplot(gs[-1, :])
+
+    frame_labels = [ts[-4:] for ts, _, _ in cached]  # use hhmm as short label
+    rmse_vals = [np.sqrt(m["mse"]) if np.isfinite(m["mse"]) else np.nan for m in per_frame_metrics]
+    mae_vals = [m["mae"] for m in per_frame_metrics]
+    bias_vals = [m["bias"] for m in per_frame_metrics]
+
+    x = np.arange(nframes)
+
+    ax_metrics.plot(x, rmse_vals, marker="o", label="RMSE")
+    ax_metrics.plot(x, mae_vals, marker="s", label="MAE")
+    ax_metrics.plot(x, bias_vals, marker="^", label="Bias")
+
+    ax_metrics.set_xticks(x)
+    ax_metrics.set_xticklabels(frame_labels, rotation=45)
+    ax_metrics.set_xlabel("Time (hhmm)")
+    ax_metrics.set_ylabel("Error (dBZ)")
+    ax_metrics.grid(True, linestyle="--", alpha=0.3)
+    ax_metrics.legend(loc="upper right", fontsize=8)
+
+    # Add overall metrics as a text box
+    overall_text = (
+        f"Overall: RMSE={np.sqrt(overall['mse']):.2f}, "
+        f"MAE={overall['mae']:.2f}, Bias={overall['bias']:.2f}, "
+        f"R={overall['corr']:.2f}"
+    )
+    ax_metrics.text(
+        0.01,
+        0.95,
+        overall_text,
+        transform=ax_metrics.transAxes,
+        fontsize=9,
+        va="top",
+        ha="left",
+        bbox=dict(facecolor="white", alpha=0.8, edgecolor="none"),
+    )
+
+    # Colorbar on the right, outside the image panels
     if last_im is not None:
         cbar = fig.colorbar(
             last_im,
-            ax=axes,
+            ax=list(axes_img.ravel()),
             orientation="vertical",
-            fraction=0.04,  # thinner bar
-            pad=0.02,       # gap between bar and plots
+            fraction=0.04,
+            pad=0.02,
         )
         label = getattr(norm, "label", None) if norm is not None else None
         if label:
