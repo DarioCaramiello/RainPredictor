@@ -97,7 +97,8 @@ def benchmark_val(loader, model, device, pred_length: int,
     with torch.no_grad():
         for _ in range(warmup):
             try:
-                inputs, _, _ = next(it)
+                #inputs, _, _ = next(it)
+                inputs, *rest = next(it)
             except StopIteration:
                 return 0.0
             inputs = inputs.to(device, non_blocking=True)
@@ -108,7 +109,8 @@ def benchmark_val(loader, model, device, pred_length: int,
         counted = 0
         for _ in range(measure):
             try:
-                inputs, _, _ = next(it)
+                #inputs, _, _ = next(it)
+                inputs, *rest = next(it)
             except StopIteration:
                 break
             inputs = inputs.to(device, non_blocking=True)
