@@ -15,6 +15,8 @@ Features
 - Colorbar placed outside the plot area to avoid overlapping images
 - Frame-by-frame and overall metrics (MSE, MAE, Bias, Correlation)
 - Metrics panel plotted at the bottom of the figure
+- User-selectable figure orientation: landscape or portrait
+- Optional JSON dump with all per-frame and overall metrics (--metrics-json)
 """
 
 import argparse
@@ -92,7 +94,8 @@ def load_palette(path: Path):
 
     if len(colors) != len(levels):
         raise ValueError(
-            f"Palette {path}: {len(colors)} colors but {len(levels)} levels."
+            f"Palette %s: %d colors but %d levels."
+            % (path, len(colors), len(levels))
         )
 
     # BoundaryNorm expects len(boundaries) = len(colors) + 1
@@ -350,6 +353,8 @@ def plot_sequence(
     title: str | None,
     cmap,
     norm,
+    orientation: str = "landscape",
+    metrics_json: Path | None = None,
 ):
     """
     Plot a sequence of frame pairs (truth vs pred) as a 2-column figure.
@@ -358,7 +363,8 @@ def plot_sequence(
     If norm is provided (e.g. BoundaryNorm from a palette), it is used.
     Otherwise global vmin/vmax are computed and used.
 
-    Additionally, a bottom panel shows frame-by-frame metrics (RMSE, MAE, Bias).
+    Additionally, a bottom panel shows frame-by-frame metrics (RMSE, MAE, Bias),
+    and metrics can optionally be dumped to a JSON file for post-processing.
     """
     logger.info("Sequence mode: plotting %d frame pairs.", len(pairs))
 
@@ -386,7 +392,9 @@ def plot_sequence(
     per_frame_metrics = []
     for ts, truth_data, pred_data in cached:
         m = compute_frame_metrics(truth_data, pred_data)
-        per_frame_metrics.append(m)
+        m_with_ts = {"timestamp": ts}
+        m_with_ts.update(m)
+        per_frame_metrics.append(m_with_ts)
         logger.debug(
             "Metrics %s: MSE=%.4f, MAE=%.4f, Bias=%.4f, Corr=%.4f",
             ts,
@@ -405,14 +413,37 @@ def plot_sequence(
         overall["corr"],
     )
 
+    # Optional JSON dump of metrics
+    if metrics_json is not None:
+        logger.info("Writing metrics JSON to %s", metrics_json)
+        # Add RMSE explicitly
+        for m in per_frame_metrics:
+            m["rmse"] = float(np.sqrt(m["mse"])) if np.isfinite(m["mse"]) else float("nan")
+        overall_with_rmse = dict(overall)
+        overall_with_rmse["rmse"] = float(np.sqrt(overall["mse"])) if np.isfinite(overall["mse"]) else float("nan")
+
+        metrics_payload = {
+            "per_frame": per_frame_metrics,
+            "overall": overall_with_rmse,
+        }
+        with metrics_json.open("w") as f:
+            json.dump(metrics_payload, f, indent=2)
+        logger.info("Metrics JSON successfully written.")
+
     # ------------------------------------------------------------------
     # Figure layout using GridSpec: nframes rows for images + 1 row for metrics
     # ------------------------------------------------------------------
     import matplotlib.gridspec as gridspec
 
+    # Orientation-dependent figure size
+    if orientation == "landscape":
+        fig_width = 10
+        fig_height = max(4, 2 * nframes + 2)
+    else:  # portrait
+        fig_width = 7
+        fig_height = max(6, 3 * nframes + 3)
+
     height_ratios = [1.0] * nframes + [0.6]
-    fig_height = max(4, 2 * nframes + 2)
-    fig_width = 9
 
     fig = plt.figure(figsize=(fig_width, fig_height), constrained_layout=True)
     gs = gridspec.GridSpec(
@@ -453,9 +484,12 @@ def plot_sequence(
         # Annotate per-frame metrics on the left plot as text
         m = per_frame_metrics[row_idx]
         metric_text = (
-            f"RMSE={np.sqrt(m['mse']):.2f}\n"
-            f"MAE={m['mae']:.2f}\n"
-            f"Bias={m['bias']:.2f}\n"
+            f"RMSE={m['rmse']:.2f}
+"
+            f"MAE={m['mae']:.2f}
+"
+            f"Bias={m['bias']:.2f}
+"
             f"R={m['corr']:.2f}"
         )
         ax_truth.text(
@@ -475,7 +509,7 @@ def plot_sequence(
     ax_metrics = fig.add_subplot(gs[-1, :])
 
     frame_labels = [ts[-4:] for ts, _, _ in cached]  # use hhmm as short label
-    rmse_vals = [np.sqrt(m["mse"]) if np.isfinite(m["mse"]) else np.nan for m in per_frame_metrics]
+    rmse_vals = [m["rmse"] for m in per_frame_metrics]
     mae_vals = [m["mae"] for m in per_frame_metrics]
     bias_vals = [m["bias"] for m in per_frame_metrics]
 
@@ -494,7 +528,7 @@ def plot_sequence(
 
     # Add overall metrics as a text box
     overall_text = (
-        f"Overall: RMSE={np.sqrt(overall['mse']):.2f}, "
+        f"Overall: RMSE={overall_with_rmse['rmse']:.2f}, "
         f"MAE={overall['mae']:.2f}, Bias={overall['bias']:.2f}, "
         f"R={overall['corr']:.2f}"
     )
@@ -592,6 +626,25 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--orientation",
+        type=str,
+        choices=["landscape", "portrait"],
+        default="landscape",
+        help=(
+            "Figure orientation: 'landscape' (wide) or 'portrait' (tall). "
+            "Default: landscape."
+        ),
+    )
+    parser.add_argument(
+        "--metrics-json",
+        type=str,
+        default=None,
+        help=(
+            "Optional path to a JSON file where per-frame and overall metrics "
+            "will be written for post-processing."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
@@ -626,12 +679,16 @@ def main():
         raise SystemExit(1)
 
     save_path = Path(args.save).resolve() if args.save else None
+    metrics_json_path = Path(args.metrics_json).resolve() if args.metrics_json else None
+
     plot_sequence(
         pairs=pairs,
         save_path=save_path,
         title=args.title,
         cmap=cmap,
         norm=norm,
+        orientation=args.orientation,
+        metrics_json=metrics_json_path,
     )
 
 
